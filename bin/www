@@ -1,0 +1,244 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+
+var app = require('../app');
+var crypto = require('crypto');
+var debug = require('debug')('wazirautomate:server');
+var http = require('http');
+var axios = require('axios');
+var qs = require('qs');
+const { setgroups } = require('process');
+var url = 'https://api.wazirx.com/sapi/v1/'
+const secret = '3Ty9PUOkBfwx9jkzmGC9AExJoCwVipVRNQCWNzHF';
+var latestPrice = {}, previousPrice = {}, holding = {}, balance = 2000, askPrice = {}, bidPrice = {}, isBuy = true;
+const coins =["shibinr"];
+//const coins = ["ethinr","wrxinr", "shibinr", "btcinr", "lrcinr"];
+
+var data = qs.stringify({
+});
+
+ var config1 = {
+  method: 'get',
+  headers: { 
+    'X-Api-Key': 'hQdju6vsIGzMHaLOqAerJOgWpI3kBtoiBNVgSoDND1F1WE4Q7li2bQPvXcgU2sBG'
+  },
+  data : data
+};
+
+var port = normalizePort(process.env.PORT || '3000');
+app.set('port', port);
+
+/**
+ * Create HTTP server.
+ */
+
+var server = http.createServer(app);
+
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+server.listen(port);
+server.on('error', onError);
+server.on('listening', onListening);
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+
+  var bind = typeof port === 'string'
+    ? 'Pipe ' + port
+    : 'Port ' + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+async function setup(){
+    coins.forEach(element => {
+      latestPrice[element] = 0;
+      holding[element] = 0;
+  });
+}
+
+
+function getSignature(params){
+  let signature = crypto.createHmac('sha256', secret).update(params).digest("hex");
+  return signature;
+}
+
+function getStatus(){
+  config1.url = url + "systemStatus";
+  axios(config1).then(function (response){
+    if(response.data.status == 'normal')
+      console.log("System is up");
+    else
+      console.log(response);
+  })
+}
+
+async function tradeSetup(){
+  params = "recvWindow=60000&timestamp="+ new Date().getTime();
+  signature = getSignature(params);
+  params = params+"&signature="+signature
+  config1.url = url + "funds?" + params;
+  console.log(params);
+  axios(config1).then(function(response){
+    index = response.data.findIndex(function(item, i){
+      return item.asset === "inr"
+    })
+    var freeInr = response.data[index].free;
+    console.log(freeInr);
+  })
+}
+
+function buyElement(element, elePrice){
+//  console.log(latestPrice[element]);
+  var quantity = Math.floor(elePrice/askPrice[element]);
+  console.log(quantity);
+  console.log("Can buy "+quantity +" of "+ element);
+  TradeElement(element, askPrice[element], quantity, 'buy');
+  holding[element] = quantity;
+  displayHoldings();
+}
+
+function sellElement(element){
+  console.log("Can sell "+holding[element] +" of "+ element);
+  TradeElement(element, bidPrice[element], holding[element],'sell');
+  holding[element] = 0;
+  displayHoldings();
+}
+
+function TradeElement(element, price, quantity, tradeType){
+  var time = new Date().getTime();
+  params = "symbol="+element+"&recvWindow=60000&side="+tradeType+"&type=limit&quantity="+quantity+"&price="+price+"&timestamp="+time;
+  signature = getSignature(params);
+  params = params+"&signature="+signature;
+  //console.log(params);
+  var dat = {
+    symbol : element,
+    recvWindow : 60000,
+    side : tradeType,
+    type : 'limit',
+    quantity : quantity,
+    price : price,
+    timestamp : time,
+    signature : signature
+  }
+  var options = {
+    method : 'POST',
+    headers : {
+      'content-type' : 'application/x-www-form-urlencoded',
+      'X-Api-Key': 'hQdju6vsIGzMHaLOqAerJOgWpI3kBtoiBNVgSoDND1F1WE4Q7li2bQPvXcgU2sBG'
+    },
+    data : qs.stringify(dat),
+    url : url+'order'
+  }
+  // axios(options).then(function (response){
+  //   console.log(response.data);
+  //   latestPrice[element] = price;
+  // })
+  latestPrice[element] = price;
+}
+
+async function getPrices(){
+  config1.url = url + 'tickers/24hr';
+  axios(config1).then(function (response){
+    coins.forEach(function (element){
+      index = response.data.findIndex(function(item, i){
+        return item.symbol == element
+      })  
+      askPrice[element] = response.data[index].askPrice;
+      bidPrice[element] = response.data[index].bidPrice;
+      console.log( element + " ask: " + " : " + askPrice[element] + " bid: " + " : " + bidPrice[element]);
+    })
+  })
+}
+
+function displayHoldings(){
+  getPrices();
+  coins.forEach(function (element){
+    latestPrice[element] = isBuy ? askPrice[element] : bidPrice[element];
+    console.log("Holding :"+ holding[element]+" "+element + " at the price : " + latestPrice[element]);
+  })
+}
+
+
+function completeTrade(){
+  coins.forEach(function (element){
+    if((holding[element] > 0 ) && latestPrice[element] < bidPrice [element]  ){
+      latestPrice[element] = bidPrice[element];
+      sellElement(element);
+      isBuy = false;
+    }
+    else if(holding[element] == 0 && (latestPrice[element] > askPrice [element] || latestPrice[element] == 0) ){
+      latestPrice[element] = askPrice[element];
+      buyElement(element, balance);
+      isBuy = true;
+    }
+    else{
+      displayHoldings();
+    }
+  })
+}
+
+
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+async function startTrade(){
+  getStatus();
+  setup();
+  getPrices();
+  setTimeout(tradeSetup, 1000); 
+  setInterval(completeTrade, 60000);
+}
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  debug('Listening on ' + bind);
+  startTrade();
+}
